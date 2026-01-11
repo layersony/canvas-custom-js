@@ -1,424 +1,156 @@
-"use strict";
+////////////////////////////////////////////////////
+// DESIGNPLUS CONFIG                            //
+////////////////////////////////////////////////////
+DpPrimary = {
+    lms: 'canvas',
+    templateCourse: '1064',
+    hideButton: true,
+    enableWizard: false,
+    hideLti: false,
+    extendedCourse: '', // added in sub-account theme
+    sharedCourse: '', // added from localStorage
+    courseFormats: [],
+    canvasRoles: [],
+    canvasUsers: [],
+    canvasCourseIds: [],
+    plugins: [],
+    excludedModules: [],
+    includedModules: [],
+    lang: 'en',
+}
 
-/**
- * Canvas LMS Custom Integration
- */
+// merge with extended/shared customizations config
+DpConfig = { ...DpPrimary, ...(window.DpConfig ?? {}) }
 
-// Configuration Constants
-const CONFIG = {
-  API_TIMEOUT: 15000, // 15 seconds
-  MAX_RETRIES: 3,
-  RETRY_DELAY: 1000, // 1 second
-  CACHE_DURATION: 300000, // 5 minutes
-  MAX_SECTIONS_PER_COURSE: 100,
-  MAX_ENROLLMENTS_PER_REQUEST: 50
-};
+$(function () {
+    const uriPrefix = (location.href.includes('.beta.')) ? 'beta.' : '';
+    const toolsUri = (DpConfig.toolsUri) ? DpConfig.toolsUri : `https://${uriPrefix}designplus.ciditools.com/`;
+    $.getScript(`${toolsUri}js/controller.js`);
+});
+////////////////////////////////////////////////////
+// END DESIGNPLUS CONFIG                        //
+////////////////////////////////////////////////////
+window.onload = () => {
+  const env = window.ENV
+  const courseId = env.COURSE_ID;
+  const href = window.location.href;
+  const lessonId = href.match(/(pages|assignments|quizzes|discussion_topics)\/[a-zA-Z-0-9]+/g) ? href.match(/(pages|assignments|quizzes|discussion_topics)\/[a-zA-Z-0-9]+/g)[0].replace(/(pages|assignments|quizzes|discussion_topics)\//g, "") : "None";
+  const lessonType = href.match(/courses\/[0-9]+\/[a-zA-Z-_]+/g) ? href.match(/courses\/[0-9]+\/[a-zA-Z-_]+/g)[0].replace(/courses\/[0-9]+\//g, "") : "None";
+  const header = document.querySelector('.fis-header');
 
-// Cache Management
-const Cache = {
-  store: {},
-  
-  set(key, value, ttl = CONFIG.CACHE_DURATION) {
-    this.store[key] = {
-      value,
-      expiry: Date.now() + ttl
-    };
-  },
-  
-  get(key) {
-    const item = this.store[key];
-    if (!item) return null;
-    
-    if (Date.now() > item.expiry) {
-      delete this.store[key];
-      return null;
-    }
-    
-    return item.value;
-  },
-  
-  clear() {
-    this.store = {};
+
+  if (!!header) {
+    header.style.visibility = 'visible'
+    adjustHeader(lessonType, courseId, lessonId);
   }
-};
 
-// Request Queue for Rate Limiting
-const RequestQueue = {
-  queue: [],
-  processing: false,
-  maxConcurrent: 3,
-  activeRequests: 0,
-  minDelay: 100, // 100ms between requests
-  
-  add(requestFn) {
-    return new Promise((resolve, reject) => {
-      this.queue.push({ requestFn, resolve, reject });
-      this.process();
-    });
-  },
-  
-  async process() {
-    if (this.processing || this.queue.length === 0) return;
-    if (this.activeRequests >= this.maxConcurrent) return;
-    
-    this.processing = true;
-    const { requestFn, resolve, reject } = this.queue.shift();
-    this.activeRequests++;
-    
-    try {
-      const result = await requestFn();
-      resolve(result);
-    } catch (error) {
-      reject(error);
-    } finally {
-      this.activeRequests--;
-      this.processing = false;
-      
-      // Delay before processing next request
-      setTimeout(() => this.process(), this.minDelay);
+
+//   DS Illumidesk specific - reduces default height of illumidesk page
+  let illumideskWrapper = document.querySelector('.tool_content_wrapper');
+  if (!!illumideskWrapper) {
+    if (illumideskWrapper.children[0].action.includes('illumidesk')) {
+      illumideskWrapper.classList.add('no-height')
+      let iframe = document.querySelector('#tool_content');
+      if (!!iframe) iframe.classList.add('i-height')
     }
   }
 };
+  /*z
+  imports from ms instructure STARTS
+  */
+$(document).ready(function() {
+   
+    // Handler for .ready() called.
+    $('button.offline_web_export').hide();
+    $('input#course_organize_epub_by_content_type').hide();
+});
 
-// Logging Utility
-const Logger = {
-  errors: [],
-  
-  log(level, message, data = {}) {
-    const logEntry = {
-      timestamp: new Date().toISOString(),
-      level,
-      message,
-      data,
-      url: window.location.href
-    };
-    
-    console[level === 'error' ? 'error' : 'log'](
-      `[${level.toUpperCase()}] ${message}`,
-      data
-    );
-    
-    if (level === 'error') {
-      this.errors.push(logEntry);
-    }
-  },
-  
-  error(message, error) {
-    this.log('error', message, { 
-      error: error?.message || error,
-      stack: error?.stack
-    });
-  },
-  
-  info(message, data) {
-    this.log('info', message, data);
-  },
-  
-  warn(message, data) {
-    this.log('warn', message, data);
-  }
-};
+// Mark feedback as done
+window.addEventListener("message", function(event) {
+    console.log("Message received from origin:", event);
+    console.log("Data received:", event.data);
 
-// Enhanced API Request Handler with Retry Logic
-async function makeAPIRequest(url, options = {}) {
-  const cacheKey = `api_${url}`;
-  
-  // Check cache first
-  if (options.useCache !== false) {
-    const cached = Cache.get(cacheKey);
-    if (cached) {
-      Logger.info('Cache hit', { url });
-      return cached;
-    }
-  }
-  
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), CONFIG.API_TIMEOUT);
-  
-  const makeRequest = async (attempt = 1) => {
-    try {
-      Logger.info(`API Request (attempt ${attempt})`, { url });
-      
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...options.headers
+    // Check for correct origin
+    if (event.origin.startsWith("https://moringa.formstack.com")) {
+        console.log("Formstack data submitted:", JSON.stringify(event.data));
+
+        const checkbox = document.getElementById('mark-as-done-checkbox');
+        if (checkbox) {
+            // Make the checkbox visible before clicking
+            checkbox.style.display = 'block'; // Or 'visibility = visible' as needed
+            console.log("Checkbox found, triggering click...");
+            checkbox.click();
+        } else {
+            console.warn("Checkbox #mark-as-done-checkbox not found on the page.");
         }
-      });
+    } else {
+        console.warn("Unrecognized message origin:", event.origin);
+    }
+});
+
+
+
+
+var current_name = null;
+var current_email = null;
+var current_course = null;
+$(
+
+function () {
+
+    if(window.location.href.includes("feedback") || window.location.href.includes("contract") || window.location.href.includes("consent")) {
+        $('#mark-as-done-checkbox').hide();
+    }
+    
       
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      
-      // Cache successful response
-      if (options.useCache !== false) {
-        Cache.set(cacheKey, data);
-      }
-      
-      return data;
-      
-    } catch (error) {
-      clearTimeout(timeoutId);
-      
-      // Handle abort (timeout)
-      if (error.name === 'AbortError') {
-        Logger.error('Request timeout', { url, attempt });
-        throw new Error(`Request timeout after ${CONFIG.API_TIMEOUT}ms`);
-      }
-      
-      // Retry logic with exponential backoff
-      if (attempt < CONFIG.MAX_RETRIES) {
-        const delay = CONFIG.RETRY_DELAY * Math.pow(2, attempt - 1);
-        Logger.warn(`Retrying request after ${delay}ms`, { url, attempt, error: error.message });
+    $.get('/api/v1/users/self/profile', function(profile) {
+        console.log(JSON.stringify(profile));
+        current_name = profile.name;
+        current_email = profile.primary_email;
+  
         
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return makeRequest(attempt + 1);
-      }
-      
-      Logger.error('API Request failed after retries', { url, error });
-      throw error;
-    }
-  };
-  
-  return RequestQueue.add(() => makeRequest());
-}
-
-// jQuery wrapper for backward compatibility
-function makeJQueryRequest(url, options = {}) {
-  return new Promise((resolve, reject) => {
-    $.ajax({
-      url,
-      method: options.method || 'GET',
-      timeout: CONFIG.API_TIMEOUT,
-      dataType: 'json',
-      ...options
-    })
-    .done(resolve)
-    .fail((jqXHR, textStatus, errorThrown) => {
-      Logger.error('jQuery request failed', {
-        url,
-        status: textStatus,
-        error: errorThrown
-      });
-      reject(new Error(`${textStatus}: ${errorThrown}`));
     });
-  });
-}
-
-// Validated URL Parser
-function parseCanvasUrl(href) {
-  try {
-    const url = new URL(href);
-    const pathname = url.pathname;
-    
-    // Extract course ID
-    const courseMatch = pathname.match(/\/courses\/(\d+)/);
-    const courseId = courseMatch ? courseMatch[1] : null;
-    
-    // Extract lesson information
-    const lessonMatch = pathname.match(/\/(pages|assignments|quizzes|discussion_topics)\/([a-zA-Z0-9_-]+)/);
-    const lessonType = lessonMatch ? lessonMatch[1] : null;
-    const lessonId = lessonMatch ? lessonMatch[2] : null;
-    
-    // Validate extracted data
-    if (courseId && !/^\d+$/.test(courseId)) {
-      throw new Error('Invalid course ID format');
-    }
-    
-    return {
-      courseId,
-      lessonType,
-      lessonId,
-      isValid: !!(courseId || lessonType)
-    };
-    
-  } catch (error) {
-    Logger.error('URL parsing failed', { href, error });
-    return { courseId: null, lessonType: null, lessonId: null, isValid: false };
-  }
-}
-
-// User Profile with Caching
-async function getUserProfile() {
-  const cacheKey = 'user_profile';
-  const cached = Cache.get(cacheKey);
   
-  if (cached) {
-    return cached;
-  }
   
-  try {
-    const profile = await makeJQueryRequest('/api/v1/users/self/profile', { useCache: true });
     
-    const userData = {
-      id: profile.id,
-      name: profile.name || 'Unknown User',
-      email: profile.primary_email || '',
-      sisId: profile.sis_user_id || null
-    };
     
-    Cache.set(cacheKey, userData);
-    Logger.info('User profile loaded', { userId: userData.id });
-    
-    return userData;
-    
-  } catch (error) {
-    Logger.error('Failed to load user profile', error);
-    throw error;
-  }
-}
+  //   get course id
+    var url = window.location.href;
+    if(url.includes('courses/')){
+        var course_str = url.substr(url.indexOf('course'));
+        var segments = course_str.split('/');
+        console.log('course ID'+segments[1]);
+        $.get('/api/v1/courses/'+segments[1], function(course) {
+            console.log(JSON.stringify(course));
+            current_course = course;
+  
+            zE('webWidget', 'updateSettings', {
+                webWidget: {
+                    contactForm: {
+                        title: {
+                            '*': course.course_code+' Support'
+                        },
+                        subject: true,
+                        fields: [{ id:'subject', prefill: { '*': course.course_code+' Technical Support'}}]
+                    }
+                }
+              });
+        });  
+    }
 
-// Course Information with Validation
-async function getCourseInfo(courseId) {
-  if (!courseId || !/^\d+$/.test(courseId)) {
-    throw new Error('Invalid course ID');
-  }
-  
-  try {
-    const course = await makeJQueryRequest(`/api/v1/courses/${courseId}`, { useCache: true });
-    
-    // Validate course has required fields
-    if (!course.course_code) {
-      Logger.warn('Course missing course_code', { courseId });
-      return null;
-    }
-    
-    // Check if this is a valid course offering
-    if (!/\d+/.test(course.course_code)) {
-      Logger.info('Course offering does not have term number', { courseId });
-      return null;
-    }
-    
-    if (!course.start_at || !course.end_at) {
-      Logger.info('Course missing start/end dates', { courseId });
-      return null;
-    }
-    
-    return {
-      id: course.id,
-      code: course.course_code,
-      startDate: course.start_at.split("T")[0],
-      endDate: course.end_at.split("T")[0],
-      term: extractTerm(course.course_code)
-    };
-    
-  } catch (error) {
-    Logger.error('Failed to load course info', { courseId, error });
-    throw error;
-  }
-}
-
-// Extract term from course code
-function extractTerm(courseCode) {
-  const match = courseCode.match(/\d+/);
-  if (!match) return null;
-  
-  const prefix = courseCode.toLowerCase().includes("pt") 
-    ? courseCode.slice(0, 4) 
-    : courseCode.slice(0, 2);
-    
-  return `${prefix}${match[0]}`;
-}
-
-// Get Primary Section with Limits
-async function getPrimarySection(courseId) {
-  if (!courseId) {
-    throw new Error('Course ID is required');
-  }
-  
-  try {
-    const sections = await makeJQueryRequest(
-      `/api/v1/courses/${courseId}/sections?include[]=total_students&per_page=${CONFIG.MAX_SECTIONS_PER_COURSE}`,
-      { useCache: true }
-    );
-    
-    if (!Array.isArray(sections) || sections.length === 0) {
-      Logger.warn('No sections found', { courseId });
-      return null;
-    }
-    
-    // Find section with most students (primary section)
-    const primarySection = sections.reduce((max, section) => {
-      const studentCount = section.total_students || 0;
-      return studentCount > (max.total_students || 0) ? section : max;
-    }, sections[0]);
-    
-    Logger.info('Primary section identified', { 
-      courseId, 
-      sectionId: primarySection.id,
-      students: primarySection.total_students 
+    waitForElm('#fs-iframe').then((elm) => {
+        console.log('Element is ready');
+        console.log(elm.textContent);
+        populateFormStackForm(elm);
     });
     
-    return primarySection;
-    
-  } catch (error) {
-    Logger.error('Failed to get primary section', { courseId, error });
-    throw error;
-  }
+    /*
+    ----------------------------------------------
+    *Populate Formstack Feedback form END
+    ---------------------------------------------
+    */
 }
-
-// Get Page Information
-async function getPageInfo(courseId, pageId) {
-  if (!courseId || !pageId) {
-    throw new Error('Course ID and Page ID are required');
-  }
-  
-  try {
-    const page = await makeJQueryRequest(
-      `/api/v1/courses/${courseId}/pages/${pageId}`,
-      { useCache: true }
-    );
-    
-    return {
-      title: page.title || 'Untitled Page',
-      id: page.page_id,
-      createdAt: page.created_at,
-      updatedAt: page.updated_at,
-      url: page.html_url,
-      _url: page.url
-    };
-    
-  } catch (error) {
-    Logger.error('Failed to load page info', { courseId, pageId, error });
-    throw error;
-  }
-}
-
-// Get User Enrollment with Pagination
-async function getUserEnrollment(courseId, userId, primarySectionId) {
-  if (!courseId || !userId) {
-    throw new Error('Course ID and User ID are required');
-  }
-  
-  try {
-    const enrollments = await makeJQueryRequest(
-      `/api/v1/courses/${courseId}/enrollments?user_id=${userId}&per_page=${CONFIG.MAX_ENROLLMENTS_PER_REQUEST}`,
-      { useCache: true }
-    );
-    
-    if (!Array.isArray(enrollments) || enrollments.length === 0) {
-      Logger.warn('No enrollments found', { courseId, userId });
-      return { enrollmentId: 0 };
-    }
-    
-    // Find enrollment that's not the primary section
-    const enrollment = enrollments.find(e => e.course_id !== primarySectionId);
-    
-    return {
-      enrollmentId: enrollment ? enrollment.id : enrollments[0].id || 0
-    };
-    
-  } catch (error) {
-    Logger.error('Failed to get user enrollment', { courseId, userId, error });
-    return { enrollmentId: 0 };
-  }
-}
+);
 
 function extractTermCourseCode(course_id) {
   if (/P\d+/.test(course_id)) {
@@ -431,46 +163,270 @@ function extractTermCourseCode(course_id) {
 }
 
 function student_contract_uid(courseCode, studentEmail){
-  const code = extractTermCourseCode(courseCode);
-  return `${code}_${studentEmail}`;
+    const code = extractTermCourseCode(courseCode);
+    return `${code}_${studentEmail}`;
 }
 
-// Populate FormStack Form with Comprehensive Error Handling
-async function populateFormStackForm(fsIframe) {
-  if (!fsIframe) {
-    Logger.warn('FormStack iframe not found');
-    return;
-  }
-  
-  fsIframe.addEventListener("load", async function() {
-    try {
-      const urlData = parseCanvasUrl(window.location.href);
-      
-      if (!urlData.isValid || !urlData.courseId || !urlData.lessonId) {
-        Logger.info('Not a valid course page for FormStack', { urlData });
-        return;
-      }
-      
-      Logger.info('Starting FormStack population', { urlData });
-      
-      // Fetch all required data in parallel where possible
-      const [userProfile, courseInfo] = await Promise.all([
-        getUserProfile(),
-        getCourseInfo(urlData.courseId)
-      ]);
-      
-      if (!courseInfo) {
-        Logger.info('Course not eligible for FormStack', { courseId: urlData.courseId });
-        return;
-      }
-      
-      // Fetch dependent data
-      const [primarySection, pageInfo] = await Promise.all([
-        getPrimarySection(urlData.courseId),
-        getPageInfo(urlData.courseId, urlData.lessonId)
-      ]);
-      
-      const enrollment = await getUserEnrollment(
-        urlData.courseId,
-        userProfile.id,
-        primarySec...
+
+function populateFormStackForm(fs_iframe){
+    //const fs_iframe = document.getElementById("fs-iframe"); //find the iframe with Formstack
+    console.log('fs-frame::'+ fs_iframe);
+    if(fs_iframe==null)return;
+    // Make sure the iframe is loaded
+    fs_iframe.addEventListener("load", function(){
+       var data = {}
+        const url = window.location.href;
+        console.log(`Formstack URL:: ${url}`)
+        if(url.includes('courses/')){
+            let course_str = url.substr(url.indexOf('course'));
+            let course_segments = course_str.split('/');
+            let page_str = url.substr(url.indexOf('pages'));
+            let page_segments = page_str.split('/');
+            // console.log('course ID'+course_segments[1]);
+            // console.log('Page Title'+page_segments[1]);
+            
+            // Retrieve course information
+            $.get('/api/v1/courses/'+course_segments[1], function(course) {
+                let current_course = course.course_code;
+                let course_start = course.start_at
+                let course_end = course.end_at
+                let courseId = course.id
+                // let course_sis_id = course.sis_course_id
+                console.log(`Current course Info::${current_course}`)
+                if (!/\d+/.test(current_course)){
+                    
+                    console.log("Course Offering does not have term number included")
+                    return
+                }
+                if(!course_start||!course_end){
+                    console.log("This Course Offering is either Blueprint or does not have start or end date included")
+                    return
+                }
+                data["course_code"] =  current_course
+                data["course_start"] = course_start.split("T")[0]
+                data["course_end"] = course_end.split("T")[0]
+               
+                  if (current_course.toLocaleLowerCase().includes("PT")){
+                    data["term"] = `${current_course.slice(0, 4)}${current_course.match(/\d+/)[0]}`
+                }else{
+                    data["term"] = `${current_course.slice(0, 2)}${current_course.match(/\d+/)[0]}`
+                }
+                //*Retrieve sections
+                $.get(`/api/v1/courses/${course_segments[1]}/sections?include[]=total_students`, function(sectionList) {
+                    var max = 0
+                    var primarySectionId = 0
+                    for(var i=0; i<sectionList.length; i++){   
+                        if(max <  sectionList[i].total_students){
+                            max = sectionList[i].total_students
+                        }
+                    }
+                    for(var i=0; i<sectionList.length; i++){   
+                        if(max === sectionList[i].total_students){
+                            primarySectionId = sectionList[i].id
+                        }
+                    }
+                    // Get Page info for content feedback
+                    $.get(`/api/v1/courses/${course_segments[1]}/pages/${page_segments[1]}`, function(page) { 
+                        var page_title = page.title
+                        var page_id = page.page_id
+                        var page_created_at = page.created_at
+                        var page_updated_at = page.updated_at
+                        var page_url = page.html_url
+                        var _url = page.url
+                       // console.log(Page url: ${page_url})
+                        data["page_title"] = page_title
+                        data["page_id"] = page_id
+                        data["page_created_at"] = page_created_at 
+                        data["page_updated_at"] = page_updated_at
+                        data["page_url"] = page_url
+                        data["_url"] = _url
+                        // Get enrollment ID
+                        
+                        // Get Profile of user
+                        $.get('/api/v1/users/self/profile', function(profile) {
+                            // Get the current user profile
+                            
+                            
+                            //console.log(JSON.stringify(profile));
+                           var current_user_id = profile.id;
+                           var current_user_name = profile.name;
+                           var current_user_email = profile.primary_email;
+                           var current_sis_id = profile.sis_user_id;
+                            
+                            // debugg log
+                            // console.log(current_user_id);
+                            // console.log(current_user_email);
+                            
+                            // data object
+                            data["id"] =  current_user_id
+                            data["name"] =  current_user_name
+                            data["email"] =  current_user_email
+                            data["SIS_Id"] = current_sis_id
+
+                            data["student_uid"] = student_contract_uid(current_course, current_user_email)
+                            
+                            console.log(student_contract_uid(current_course, current_user_email));
+                            
+                            // debugg log
+                           // console.log(Canvas:: User ID ${current_user_id});
+                            // console.log(current_user_email);
+                            
+                            
+                            // data object
+                            data["id"] =  current_user_id
+                            data["name"] =  current_user_name
+                            // data["email"] =  current_user_email
+                            data["SIS_Id"] = current_sis_id
+                            
+                            
+                            $.get(`/api/v1/courses/${courseId}/enrollments?user_id=${current_user_id}`, function(enrollmentsList) {
+                                // Getting the section enrollment. 
+                                var current_LMS_id;
+                                let enrollment
+                                for(var i=0; i<enrollmentsList.length; i++){   
+                                    if(primarySectionId !==  enrollmentsList[i].course_id){
+                                        enrollment = enrollmentsList[i]
+                                    }
+                                }
+                                if(enrollment){
+                                     current_LMS_id = enrollment.id
+                                }else{
+                                     current_LMS_id = 0;
+                                }
+                               
+                               // console.log(Canvas:: LMS ID ${current_LMS_id});
+                                data["LMS_Id"] = current_LMS_id
+                                // console.log(data["SIS_Id"])
+                                // console.log(data["course_code"])
+                                fs_iframe.contentWindow.postMessage(data, "*")
+                                // console.log("I. data passed")
+                            }); 
+                        });
+                    });
+                });
+            });  
+        }    
+    })
+};
+
+function waitForElm(selector) {
+    return new Promise(resolve => {
+        if (document.querySelector(selector)) {
+            return resolve(document.querySelector(selector));
+        }
+        const observer = new MutationObserver(mutations => {
+            if (document.querySelector(selector)) {
+                resolve(document.querySelector(selector));
+                observer.disconnect();
+            }
+        });
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    });
+}
+
+
+/*
+------------------------------
+    Start of AMI Code Iframe
+------------------------------
+*/
+let user_email = null;
+
+function updateIframe() {
+    $.get('/api/v1/users/self/profile', function(profile) {
+        user_email = profile.primary_email;
+        const ami_Softskill_iframe = document.getElementById('ami_Softskill_iframe');
+
+        if (user_email) {
+            let new_url = `https://account.africanmanagers.org/dashboard/home?api_key=AMI_ts33rL_9sBp49_0JyUhBtNHOHd1oq4h5RB_juvX48-E=&academy_id=2581&user_email=${user_email}`;
+
+            showLoader();
+
+            // Set iframe source
+            ami_Softskill_iframe.style.display = "none";
+            ami_Softskill_iframe.src = new_url;
+
+            document.getElementById('retryButton')?.remove();
+
+            // Hide loader when iframe loads
+            ami_Softskill_iframe.onload = function () {
+                hideLoader();
+                ami_Softskill_iframe.style.display = "block";
+            };
+        } else {
+            showRetryButton();
+        }
+    }).fail(function() {
+        console.error('Failed to fetch profile');
+        showRetryButton();
+    });
+}
+
+// Function to show loader
+function showLoader() {
+    const container = document.getElementById('ami_Softskill_iframe').parentNode;
+    
+    let loader = document.getElementById("loader");
+    if (!loader) {
+        loader = document.createElement("div");
+        loader.id = "loader"; 
+        loader.style.fontSize = "50px";
+        loader.style.margin = "20px";
+        loader.style.textAlign = "center";
+        container.appendChild(loader);
+    
+        // Create spinner element
+        const spinner = document.createElement("div");
+        spinner.id = "spinner";
+        spinner.textContent = "ÃƒÂ¢Ã¢â‚¬â€Ã‚Â";
+        loader.appendChild(spinner);
+
+        // Animate spinner
+        let frames = ["ÃƒÂ¢Ã¢â‚¬â€Ã‚Â", "ÃƒÂ¢Ã¢â‚¬â€Ã¢â‚¬Å“", "ÃƒÂ¢Ã¢â‚¬â€Ã¢â‚¬Ëœ", "ÃƒÂ¢Ã¢â‚¬â€Ã¢â‚¬â„¢"];
+        let index = 0;
+        window.spinLoader = setInterval(() => {
+            spinner.textContent = frames[index % frames.length]; 
+            index++;
+        }, 150);
+    }
+}
+
+// Function to hide loader
+function hideLoader() {
+    clearInterval(window.spinLoader);
+    document.getElementById("loader")?.remove();
+}
+
+// Function to show retry button
+function showRetryButton() {
+    const ami_Softskill_iframe = document.getElementById('ami_Softskill_iframe');
+    
+    if (!document.getElementById('retryButton')) {
+        let retryButton = document.createElement('button');
+        retryButton.id = 'retryButton';
+        retryButton.textContent = 'Retry';
+        retryButton.addEventListener('click', updateIframe);
+        ami_Softskill_iframe.insertAdjacentElement('beforebegin', retryButton);
+    }
+}
+
+// Initialize iframe update
+
+window.addEventListener('load', () => {
+    const iframe = document.getElementById('ami_Softskill_iframe');
+    if (iframe) {
+        updateIframe();
+    }
+});
+
+
+
+
+/*
+------------------------------
+    End of AMI codes Iframe
+------------------------------
+*/
