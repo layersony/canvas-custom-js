@@ -1,70 +1,3 @@
-////////////////////////////////////////////////////
-// DESIGNPLUS CONFIG                            //
-////////////////////////////////////////////////////
-DpPrimary = {
-    lms: 'canvas',
-    templateCourse: '1064',
-    hideButton: true,
-    enableWizard: false,
-    hideLti: false,
-    extendedCourse: '', // added in sub-account theme
-    sharedCourse: '', // added from localStorage
-    courseFormats: [],
-    canvasRoles: [],
-    canvasUsers: [],
-    canvasCourseIds: [],
-    plugins: [],
-    excludedModules: [],
-    includedModules: [],
-    lang: 'en',
-}
-
-// merge with extended/shared customizations config
-DpConfig = { ...DpPrimary, ...(window.DpConfig ?? {}) }
-
-$(function () {
-    const uriPrefix = (location.href.includes('.beta.')) ? 'beta.' : '';
-    const toolsUri = (DpConfig.toolsUri) ? DpConfig.toolsUri : `https://${uriPrefix}designplus.ciditools.com/`;
-    $.getScript(`${toolsUri}js/controller.js`);
-});
-////////////////////////////////////////////////////
-// END DESIGNPLUS CONFIG                        //
-////////////////////////////////////////////////////
-window.onload = () => {
-  const env = window.ENV
-  const courseId = env.COURSE_ID;
-  const href = window.location.href;
-  const lessonId = href.match(/(pages|assignments|quizzes|discussion_topics)\/[a-zA-Z-0-9]+/g) ? href.match(/(pages|assignments|quizzes|discussion_topics)\/[a-zA-Z-0-9]+/g)[0].replace(/(pages|assignments|quizzes|discussion_topics)\//g, "") : "None";
-  const lessonType = href.match(/courses\/[0-9]+\/[a-zA-Z-_]+/g) ? href.match(/courses\/[0-9]+\/[a-zA-Z-_]+/g)[0].replace(/courses\/[0-9]+\//g, "") : "None";
-  const header = document.querySelector('.fis-header');
-
-
-  if (!!header) {
-    header.style.visibility = 'visible'
-    adjustHeader(lessonType, courseId, lessonId);
-  }
-
-
-//   DS Illumidesk specific - reduces default height of illumidesk page
-  let illumideskWrapper = document.querySelector('.tool_content_wrapper');
-  if (!!illumideskWrapper) {
-    if (illumideskWrapper.children[0].action.includes('illumidesk')) {
-      illumideskWrapper.classList.add('no-height')
-      let iframe = document.querySelector('#tool_content');
-      if (!!iframe) iframe.classList.add('i-height')
-    }
-  }
-};
-  /*z
-  imports from ms instructure STARTS
-  */
-$(document).ready(function() {
-   
-    // Handler for .ready() called.
-    $('button.offline_web_export').hide();
-    $('input#course_organize_epub_by_content_type').hide();
-});
-
 // Mark feedback as done
 window.addEventListener("message", function(event) {
     console.log("Message received from origin:", event);
@@ -88,32 +21,20 @@ window.addEventListener("message", function(event) {
     }
 });
 
-
-
-
 var current_name = null;
 var current_email = null;
 var current_course = null;
 $(
-
 function () {
-
     if(window.location.href.includes("feedback") || window.location.href.includes("contract") || window.location.href.includes("consent")) {
         $('#mark-as-done-checkbox').hide();
     }
-    
-      
     $.get('/api/v1/users/self/profile', function(profile) {
         console.log(JSON.stringify(profile));
         current_name = profile.name;
         current_email = profile.primary_email;
-  
-        
     });
-  
-  
-    
-    
+
   //   get course id
     var url = window.location.href;
     if(url.includes('courses/')){
@@ -143,15 +64,14 @@ function () {
         console.log(elm.textContent);
         populateFormStackForm(elm);
     });
-    
-    /*
-    ----------------------------------------------
-    *Populate Formstack Feedback form END
-    ---------------------------------------------
-    */
-}
+   }
 );
 
+/*
+----------------------------------------------
+*Populate Formstack Feedback form END
+---------------------------------------------
+*/
 function extractTermCourseCode(course_id) {
   if (/P\d+/.test(course_id)) {
     const m = course_id.match(/^(.*?\d)(?:[A-Za-z])?(?=P\d+)/);
@@ -327,106 +247,4 @@ function waitForElm(selector) {
     });
 }
 
-
-/*
-------------------------------
-    Start of AMI Code Iframe
-------------------------------
-*/
-let user_email = null;
-
-function updateIframe() {
-    $.get('/api/v1/users/self/profile', function(profile) {
-        user_email = profile.primary_email;
-        const ami_Softskill_iframe = document.getElementById('ami_Softskill_iframe');
-
-        if (user_email) {
-            let new_url = `https://account.africanmanagers.org/dashboard/home?api_key=AMI_ts33rL_9sBp49_0JyUhBtNHOHd1oq4h5RB_juvX48-E=&academy_id=2581&user_email=${user_email}`;
-
-            showLoader();
-
-            // Set iframe source
-            ami_Softskill_iframe.style.display = "none";
-            ami_Softskill_iframe.src = new_url;
-
-            document.getElementById('retryButton')?.remove();
-
-            // Hide loader when iframe loads
-            ami_Softskill_iframe.onload = function () {
-                hideLoader();
-                ami_Softskill_iframe.style.display = "block";
-            };
-        } else {
-            showRetryButton();
-        }
-    }).fail(function() {
-        console.error('Failed to fetch profile');
-        showRetryButton();
-    });
-}
-
-// Function to show loader
-function showLoader() {
-    const container = document.getElementById('ami_Softskill_iframe').parentNode;
-    
-    let loader = document.getElementById("loader");
-    if (!loader) {
-        loader = document.createElement("div");
-        loader.id = "loader"; 
-        loader.style.fontSize = "50px";
-        loader.style.margin = "20px";
-        loader.style.textAlign = "center";
-        container.appendChild(loader);
-    
-        // Create spinner element
-        const spinner = document.createElement("div");
-        spinner.id = "spinner";
-        spinner.textContent = "ÃƒÂ¢Ã¢â‚¬â€Ã‚Â";
-        loader.appendChild(spinner);
-
-        // Animate spinner
-        let frames = ["ÃƒÂ¢Ã¢â‚¬â€Ã‚Â", "ÃƒÂ¢Ã¢â‚¬â€Ã¢â‚¬Å“", "ÃƒÂ¢Ã¢â‚¬â€Ã¢â‚¬Ëœ", "ÃƒÂ¢Ã¢â‚¬â€Ã¢â‚¬â„¢"];
-        let index = 0;
-        window.spinLoader = setInterval(() => {
-            spinner.textContent = frames[index % frames.length]; 
-            index++;
-        }, 150);
-    }
-}
-
-// Function to hide loader
-function hideLoader() {
-    clearInterval(window.spinLoader);
-    document.getElementById("loader")?.remove();
-}
-
-// Function to show retry button
-function showRetryButton() {
-    const ami_Softskill_iframe = document.getElementById('ami_Softskill_iframe');
-    
-    if (!document.getElementById('retryButton')) {
-        let retryButton = document.createElement('button');
-        retryButton.id = 'retryButton';
-        retryButton.textContent = 'Retry';
-        retryButton.addEventListener('click', updateIframe);
-        ami_Softskill_iframe.insertAdjacentElement('beforebegin', retryButton);
-    }
-}
-
-// Initialize iframe update
-
-window.addEventListener('load', () => {
-    const iframe = document.getElementById('ami_Softskill_iframe');
-    if (iframe) {
-        updateIframe();
-    }
-});
-
-
-
-
-/*
-------------------------------
-    End of AMI codes Iframe
-------------------------------
 */
