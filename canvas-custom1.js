@@ -246,5 +246,3 @@ function waitForElm(selector) {
         });
     });
 }
-
-*/
