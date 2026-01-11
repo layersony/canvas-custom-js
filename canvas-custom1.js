@@ -24,8 +24,8 @@ window.addEventListener("message", function(event) {
 var current_name = null;
 var current_email = null;
 var current_course = null;
-$(
-function () {
+
+$(function () {
     if(window.location.href.includes("feedback") || window.location.href.includes("contract") || window.location.href.includes("consent")) {
         $('#mark-as-done-checkbox').hide();
     }
